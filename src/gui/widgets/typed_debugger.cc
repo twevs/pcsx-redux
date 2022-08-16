@@ -132,6 +132,23 @@ void PCSX::Widgets::TypedDebugger::import(std::string_view fileContents, ImportT
         });
     }
 }
+// Begin MGS.
+void PCSX::Widgets::TypedDebugger::populateFilenameToTypenameMap() {
+    std::ifstream file("filename_to_typename_map.txt");
+    std::string line;
+    while (std::getline(file, line)) {
+        std::regex regex(R"(([\w\.]+);(\w+))");
+        std::smatch matches;
+        if (regex_match(line, matches, regex)) {
+            const std::string filename = matches[1];
+            const std::string type = matches[2];
+            printf("Attempting to add to filename-to-typename map: %s -> %s\n", filename.c_str(), type.c_str());
+            assert(m_structs.contains(type));
+            m_filenameToTypenameMap[filename] = type;
+        }
+    }
+}
+// End MGS.
 
 PCSX::Widgets::TypedDebugger::TypedDebugger(bool& show) : m_show(show), m_listener(g_system->m_eventBus) {
     m_listener.listen<PCSX::Events::ExecutionFlow::Reset>([this](const auto& event) {
@@ -239,8 +256,7 @@ static bool isPrimitive(const char* type) {
            equals(type, "u_int") || equals(type, "ulong") || equals(type, "u_long");
 }
 
-void PCSX::Widgets::TypedDebugger::displayBreakpointOptions(WatchTreeNode* node, const uint32_t address,
-                                                            uint8_t* memData, const uint32_t memBase) {
+void PCSX::Widgets::TypedDebugger::displayBreakpointOptions(WatchTreeNode* node, const uint32_t address) {
     PCSX::Debug::BreakpointInvoker logReadsWritesInvoker =
         [this, node](const PCSX::Debug::Breakpoint* self, uint32_t address, unsigned width, const char* cause) {
             if (!node) {
@@ -330,7 +346,7 @@ void PCSX::Widgets::TypedDebugger::displayBreakpointOptions(WatchTreeNode* node,
                 auto toggleButtonName = functionToggledOff ? fmt::format(f_("Re-enable##{}"), instructionAddress)
                                                            : fmt::format(f_("Disable##{}"), instructionAddress);
                 if (ImGui::Button(toggleButtonName.c_str())) {
-                    auto* instructionMem = memData + instructionAddress - memBase;
+                    auto* instructionMem = g_emulator->m_mem->m_psxM + instructionAddress - 0x80000000;
                     if (functionToggledOff) {
                         memcpy(instructionMem, m_disabledInstructions[instructionAddress].data(), 4);
                         m_disabledInstructions.erase(instructionAddress);
@@ -411,7 +427,7 @@ void PCSX::Widgets::TypedDebugger::displayNode(WatchTreeNode* node, const uint32
         ImGui::TextDisabled("--");
         ImGui::TableNextColumn();  // Breakpoints.
         if (watchView) {
-            displayBreakpointOptions(node, currentAddress, memData, memBase);
+            displayBreakpointOptions(node, currentAddress);
         } else if (isInRAM(currentAddress)) {
             auto addToWatchButtonName = fmt::format(f_("Add to Watch tab##{}{}"), currentAddress, extraImGuiId);
             if (ImGui::Button(addToWatchButtonName.c_str())) {
@@ -449,7 +465,7 @@ void PCSX::Widgets::TypedDebugger::displayNode(WatchTreeNode* node, const uint32
             ImGui::TextDisabled("--");
             ImGui::TableNextColumn();  // Breakpoints.
             if (watchView) {
-                displayBreakpointOptions(node, currentAddress, memData, memBase);
+                displayBreakpointOptions(node, currentAddress);
             }
             return;
         }
@@ -476,7 +492,7 @@ void PCSX::Widgets::TypedDebugger::displayNode(WatchTreeNode* node, const uint32
             ImGui::TextDisabled("--");
             ImGui::TableNextColumn();  // Breakpoints.
             if (watchView) {
-                displayBreakpointOptions(node, currentAddress, memData, memBase);
+                displayBreakpointOptions(node, currentAddress);
             }
             return;
         }
@@ -503,7 +519,7 @@ void PCSX::Widgets::TypedDebugger::displayNode(WatchTreeNode* node, const uint32
         ImGui::TextDisabled("--");
         ImGui::TableNextColumn();  // Breakpoints.
         if (watchView) {
-            displayBreakpointOptions(node, currentAddress, memData, memBase);
+            displayBreakpointOptions(node, currentAddress);
         }
     }
 }
@@ -617,6 +633,10 @@ void PCSX::Widgets::TypedDebugger::draw(const char* title, GUI* gui) {
                 std::stringstream fileContents;
                 fileContents << file.rdbuf();
                 import(fileContents.str(), ImportType::DataTypes);
+
+                // Begin MGS.
+                populateFilenameToTypenameMap();
+                // End MGS.
             }
         }
     }
@@ -659,6 +679,10 @@ void PCSX::Widgets::TypedDebugger::draw(const char* title, GUI* gui) {
                 if (importType == ImportType::DataTypes) {
                     m_structs.clear();
                     m_typeNames.clear();
+
+                    // Begin MGS.
+                    m_filenameToTypenameMap.clear();
+                    // End MGS.
                 } else {
                     m_functionAddresses.clear();
                     m_functions.clear();
@@ -692,6 +716,10 @@ void PCSX::Widgets::TypedDebugger::draw(const char* title, GUI* gui) {
                         data.node.children.clear();
                         populate(&data.node);
                     }
+
+                    // Begin MGS.
+                    populateFilenameToTypenameMap();
+                    // End MGS.
                 }
             }
         }
@@ -713,6 +741,7 @@ void PCSX::Widgets::TypedDebugger::draw(const char* title, GUI* gui) {
                                             ImGuiTableFlags_RowBg | ImGuiTableFlags_NoBordersInBody;
 
     if (ImGui::BeginTabBar(_("TypedDebuggerTabBar"))) {
+        ImVec2 outerSize{0.f, TEXT_BASE_HEIGHT * 30.f};
         if (ImGui::BeginTabItem(_("Watch"))) {
             ImGuiInputTextFlags textFlags = ImGuiInputTextFlags_CharsHexadecimal |
                                             ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll |
@@ -793,7 +822,7 @@ void PCSX::Widgets::TypedDebugger::draw(const char* title, GUI* gui) {
             ImGui::Checkbox("Input in hexadecimal", &m_hex);
 
             gui->useMonoFont();
-            if (ImGui::BeginTable(_("WatchTable"), 6, treeTableFlags)) {
+            if (ImGui::BeginTable(_("WatchTable"), 6, treeTableFlags, outerSize)) {
                 ImGui::TableSetupColumn(_("Name"), ImGuiTableColumnFlags_WidthFixed, TEXT_BASE_WIDTH * 40.0f);
                 ImGui::TableSetupColumn(_("Type"), ImGuiTableColumnFlags_WidthFixed, TEXT_BASE_WIDTH * 30.0f);
                 ImGui::TableSetupColumn(_("Size"), ImGuiTableColumnFlags_WidthFixed, TEXT_BASE_WIDTH * 10.0f);
@@ -809,6 +838,72 @@ void PCSX::Widgets::TypedDebugger::draw(const char* title, GUI* gui) {
                 ImGui::EndTable();
             }
             ImGui::PopFont();
+
+            // Begin MGS.
+            if (ImGui::BeginTable(_("KnownActors"), 3, treeTableFlags)) {
+                ImGui::TableSetupColumn(_("Type"), ImGuiTableColumnFlags_WidthFixed, TEXT_BASE_WIDTH * 30.0f);
+                ImGui::TableSetupColumn(_("Address"), ImGuiTableColumnFlags_WidthFixed, TEXT_BASE_WIDTH * 30.0f);
+                ImGui::TableSetupColumn(_("Breakpoints"), ImGuiTableColumnFlags_NoHide);
+                ImGui::TableHeadersRow();
+
+                m_knownActors.clear();
+
+                const uint32_t gActorsListAddress = 0xacc18;
+                const size_t actorListSize = 68;
+                for (int i = 0; i < 9; ++i) {
+                    uint32_t currentAddress =
+                        gActorsListAddress + i * actorListSize + memBase;  // + memBase for consistency.
+                    auto* currentActor = memData + currentAddress - memBase;
+                    while (uint32_t nextActorAddress = *(uint32_t*)(currentActor + 4)) {
+                        if (!isInRAM(nextActorAddress)) {
+                            break;
+                        }
+                        currentAddress = nextActorAddress;
+                        currentActor = memData + currentAddress - memBase;
+                        const uint32_t nameAddress = *(uint32_t*)(currentActor + 20);
+                        if (!isInRAM(nameAddress)) {
+                            break;
+                        }
+                        char name[20];
+                        strcpy(name, (char*)memData + nameAddress - memBase);
+                        if (m_filenameToTypenameMap.contains(name)) {
+                            m_knownActors.push_back({name, nextActorAddress});
+                        }
+                    }
+                }
+
+                ImGuiListClipper clipper;
+                clipper.Begin(m_knownActors.size());
+                while (clipper.Step()) {
+                    for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+                        const auto& currentRow = m_knownActors[row];
+                        const auto& currentType = m_filenameToTypenameMap[currentRow.name];
+                        const auto& currentAddress = currentRow.address;
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(currentType.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("0x%x", currentAddress);
+                        ImGui::TableSetColumnIndex(2);
+                        auto addToWatchButtonName = fmt::format(f_("Add to Watch table##{}"), row);
+                        if (ImGui::Button(addToWatchButtonName.c_str())) {
+                            WatchTreeNode root_node;
+                            root_node.type = currentType;
+                            root_node.name = currentType;
+                            for (const auto& field : m_structs[currentType]) {
+                                root_node.size += field.size;
+                            }
+                            populate(&root_node);
+                            m_displayedWatchData.push_back({currentRow.address, false, root_node});
+                        }
+                    }
+                }
+
+                ImGui::EndTable();
+            }
+            // End MGS.
+
             ImGui::EndTabItem();
         }
 
@@ -838,7 +933,6 @@ void PCSX::Widgets::TypedDebugger::draw(const char* title, GUI* gui) {
             }
 
             gui->useMonoFont();
-            ImVec2 outerSize{0.f, TEXT_BASE_HEIGHT * 30.f};
             if (ImGui::BeginTable(_("FunctionBreakpoints"), 6, treeTableFlags, outerSize)) {
                 ImGui::TableSetupColumn(_("Name"), ImGuiTableColumnFlags_WidthFixed, TEXT_BASE_WIDTH * 40.0f);
                 ImGui::TableSetupColumn(_("Type"), ImGuiTableColumnFlags_WidthFixed, TEXT_BASE_WIDTH * 30.0f);

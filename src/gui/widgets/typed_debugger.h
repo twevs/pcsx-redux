@@ -156,14 +156,26 @@ class TypedDebugger {
                      uint32_t extraImGuiId = 0);
     void printValue(const char* type, void* address);
     void displayNewValueInput(const char* type, void* address);
-    void displayBreakpointOptions(WatchTreeNode* node, const uint32_t address, uint8_t* memData,
-                                  const uint32_t memBase);
+    void displayBreakpointOptions(WatchTreeNode* node, const uint32_t address);
 
     /**
      * Event handling.
      */
 
     EventBus::Listener m_listener;
+
+    /** Begin MGS-specific section. */
+
+    // Maps actor implementation filenames to actor struct names.
+    std::unordered_map<std::string, std::string> m_filenameToTypenameMap;
+    void populateFilenameToTypenameMap();
+    struct KnownActorInfo {
+        std::string name;
+        uint32_t address;
+    };
+    std::vector<KnownActorInfo> m_knownActors;
+
+    /** End MGS-specific section. */
 };
 
 }  // namespace Widgets
